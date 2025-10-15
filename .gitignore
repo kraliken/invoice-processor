@@ -1,0 +1,33 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pdb
+*.log
+
+# ---- Virtuális környezet ----
+.venv/
+env/
+venv/
+
+# ---- Környezeti fájlok ----
+.env
+*.env
+
+# ---- IDE / szerkesztő ----
+.vscode/
+.idea/
+
+# ---- Lokális fájlok / adat ----
+*.md
+
+számlák/
+*.xlsx
+*.pdf
+*.csv
+*.tmp
+
+# ---- macOS / Windows segédfájlok ----
+.DS_Store
+Thumbs.db
