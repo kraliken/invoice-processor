@@ -21,8 +21,9 @@ venv/
 
 # ---- Lokális fájlok / adat ----
 *.md
-
+*.html
 számlák/
+assets/
 *.xlsx
 *.pdf
 *.csv

@@ -11,10 +11,18 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from openai import OpenAI
 from openpyxl import Workbook
 from datetime import datetime
+from azure.core.credentials import AzureKeyCredential
+from azure.ai.documentintelligence import DocumentIntelligenceClient
 
 app = FastAPI()
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+endpoint = os.getenv("AZURE_DOC_INTELLIGENCE_URL")
+key = os.getenv("AZURE_DOC_INTELLIGENCE_KEY")
+
+document_intelligence_client = DocumentIntelligenceClient(
+    endpoint=endpoint, credential=AzureKeyCredential(key)
+)
 
 PROMPT = """
 Olvasd be a feltöltött PDF dokumentum teljes tartalmát, akkor is, ha több oldalas a dokumentum.
@@ -80,7 +88,7 @@ Ne adj vissza semmit, csak a JSON-t.
 """
 
 
-@app.post("/import/invoice")
+@app.post("/import/gpt-5")
 async def import_invoice(files: list[UploadFile] = File(...)):
 
     if not files:
@@ -174,6 +182,143 @@ async def import_invoice(files: list[UploadFile] = File(...)):
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
     filename = f"invoices_{timestamp}.xlsx"
+
+    return StreamingResponse(
+        output,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
+@app.post("/import/azure-ai")
+async def import_invoice(file: UploadFile = File(...)):
+    file_bytes = await file.read()
+
+    # Base64 kódolás az Azure API-hoz
+    base64_encoded = base64.b64encode(file_bytes).decode("utf-8")
+
+    poller = document_intelligence_client.begin_analyze_document(
+        model_id="prebuilt-invoice",
+        body={"base64Source": base64_encoded},
+    )
+
+    result = poller.result()
+
+    wb = Workbook()
+    ws_headers = wb.active
+    ws_headers.title = "Számlák"
+    ws_items = wb.create_sheet("Tételek")
+    # ws_tables = wb.create_sheet("Tételek (tábla)")
+
+    invoice_headers_written = False
+    item_headers_written = False
+    table_headers_written = False
+
+    for invoice in result.documents:
+        fields = invoice.fields or {}
+
+        # Számla mezők dinamikusan
+        invoice_data = {}
+        for key, field in fields.items():
+            value = (
+                field.value
+                if hasattr(field, "value")
+                else field.content if hasattr(field, "content") else ""
+            )
+            invoice_data[key] = str(value)
+
+        if not invoice_headers_written:
+            ws_headers.append(list(invoice_data.keys()))
+            invoice_headers_written = True
+
+        ws_headers.append(list(invoice_data.values()))
+
+        # Tételmezők (Items)
+        items = fields.get("Items")
+        if items and items.value_array:
+            for item in items.value_array:
+                item_obj = item.value_object
+                item_data = {}
+                for k, v in item_obj.items():
+                    val = (
+                        v.value
+                        if hasattr(v, "value")
+                        else v.content if hasattr(v, "content") else ""
+                    )
+                    item_data[k] = str(val)
+
+                # Első alkalommal: oszlopnevek
+                if not item_headers_written:
+                    ws_items.append(["InvoiceId"] + list(item_data.keys()))
+                    item_headers_written = True
+
+                ws_items.append(
+                    [invoice_data.get("InvoiceId", "")] + list(item_data.values())
+                )
+
+    # # 🆕 Táblázatos tételek beolvasása a "tables" kulcsból
+    # if result.tables:
+    #     for table in result.tables:
+    #         rows = table.row_count
+    #         cols = table.column_count
+    #         cells = table.cells
+
+    #         # Cellák mátrixba
+    #         matrix = [["" for _ in range(cols)] for _ in range(rows)]
+    #         for cell in cells:
+    #             r = cell.row_index
+    #             c = cell.column_index
+    #             matrix[r][c] = cell.content
+
+    #         # Fejléc
+    #         headers = matrix[0]
+
+    #         if not table_headers_written:
+    #             ws_tables.append(headers)
+    #             table_headers_written = True
+
+    #         for row in matrix[1:]:
+    #             ws_tables.append(row)
+
+    if result.tables:
+        # 🆕 Összes táblázat egymás után egy munkalapon ("Összes tábla")
+        ws_all_tables = wb.create_sheet("Összes tábla")
+        table_headers_written = False
+
+        for table in result.tables:
+            rows = table.row_count
+            cols = table.column_count
+            cells = table.cells
+
+            # Cellák mátrixba szervezése
+            matrix = [["" for _ in range(cols)] for _ in range(rows)]
+            for cell in cells:
+                r = cell.row_index
+                c = cell.column_index
+                matrix[r][c] = cell.content
+
+            # Fejléc: első sor a táblában
+            headers = matrix[0]
+
+            # Egyszer írjuk ki a fejlécet, az első tábla alapján
+            if not table_headers_written:
+                ws_all_tables.append(headers)
+                table_headers_written = True
+
+            # Adatsorokat hozzáadni (fejlécen kívüli sorokat)
+            for row in matrix[1:]:
+                ws_all_tables.append(row)
+
+            # Üres sor táblák közé elválasztónak (opcionális)
+            ws_all_tables.append([])
+
+    # Excel mentése
+    output = io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    filename = f"invoice_data_{timestamp}.xlsx"
 
     return StreamingResponse(
         output,
