@@ -20,12 +20,12 @@ venv/
 .idea/
 
 # ---- Lokális fájlok / adat ----
-*.md
+flow.md
 *.html
 számlák/
 assets/
 *.xlsx
-*.pdf
+# *.pdf
 *.csv
 *.tmp
 
